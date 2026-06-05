@@ -587,10 +587,90 @@ class JarvisLocal:
             )
 
             self.ui.write_log(result)
-            self.speak(f"Here are the search results for {query}, sir.")
+            from agent.local_llm import ask_ollama
+
+            spoken_summary = ask_ollama(
+                prompt=f"""
+            Summarize these search results in 2-3 short spoken sentences.
+
+            Search query:
+            {query}
+
+            Results:
+            {result}
+            """,
+                system="""
+            You are JARVIS.
+
+            Give a concise spoken summary.
+            Do not read URLs.
+            Do not list every result.
+            Speak naturally as if talking to the user.
+            """,
+                model="qwen3.5:4b"
+            )
+
+            self.speak(spoken_summary.strip())
 
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
+
+            return
+
+        if lowered.startswith(("explain ", "optimize ", "improve ", "refactor ")):
+            import os
+            from pathlib import Path
+
+            words = text.split()
+            action_word = words[0].lower()
+            filename = words[-1].strip('"')
+
+            desktop_path = Path.home() / "Desktop" / filename
+            local_path = Path(filename)
+
+            if desktop_path.exists():
+                file_path = str(desktop_path)
+            elif local_path.exists():
+                file_path = str(local_path.resolve())
+            else:
+                file_path = filename
+
+            if action_word == "explain":
+                action = "explain"
+            else:
+                action = "optimize"
+
+            self.ui.write_log(f"You: {text}")
+            self.ui.set_state("THINKING")
+
+            result = self._execute_tool_sync(
+                "code_helper",
+                {
+                    "action": action,
+                    "file_path": file_path,
+                    "language": "python"
+                }
+            )
+
+            self.ui.write_log(result)
+
+            if action == "optimize":
+                self.speak("I optimized the Python file, sir.")
+            else:
+                from agent.local_llm import ask_ollama
+
+                spoken_summary = ask_ollama(
+                    prompt=f"""
+            Summarize the following code analysis in 2-3 short sentences.
+
+            Analysis:
+            {result}
+            """,
+                    system="You are JARVIS. Speak naturally and concisely.",
+                    model="qwen3.5:4b"
+                )
+
+                self.speak(spoken_summary.strip())
 
             return
 
