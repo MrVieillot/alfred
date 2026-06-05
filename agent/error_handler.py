@@ -49,52 +49,23 @@ Return ONLY valid JSON:
 """
 
 
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-
-
 def analyze_error(
     step: dict,
     error: str,
     attempt: int = 1,
     max_attempts: int = 2
 ) -> dict:
-    """
-    Analyzes a failed step and returns a recovery decision.
-
-    Args:
-        step         : The step dict that failed
-        error        : Error message/traceback
-        attempt      : Current attempt number
-        max_attempts : How many times we've already tried
-
-    Returns:
-        {
-            "decision": ErrorDecision,
-            "reason": str,
-            "fix_suggestion": str,
-            "max_retries": int,
-            "user_message": str
-        }
-    """
-    import google.generativeai as genai
+    from agent.local_llm import ask_ollama
 
     if attempt >= max_attempts:
-        print(f"[ErrorHandler] ⚠️ Max attempts reached for step {step.get('step')} — forcing replan")
+        print(f"[ErrorHandler] Max attempts reached for step {step.get('step')} — forcing replan")
         return {
-            "decision":      ErrorDecision.REPLAN,
-            "reason":        f"Failed {attempt} times: {error[:100]}",
+            "decision": ErrorDecision.REPLAN,
+            "reason": f"Failed {attempt} times: {error[:100]}",
             "fix_suggestion": "Try a completely different approach or tool",
-            "max_retries":   0,
-            "user_message":  "Trying a different approach, sir."
+            "max_retries": 0,
+            "user_message": "Trying a different approach, sir."
         }
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash-lite",
-        system_instruction=ERROR_ANALYST_PROMPT
-    )
 
     prompt = f"""Failed step:
 Tool: {step.get('tool')}
@@ -108,50 +79,46 @@ Error:
 Attempt number: {attempt}"""
 
     try:
-        response = model.generate_content(prompt)
-        text     = response.text.strip()
-        text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        text = ask_ollama(
+            prompt=prompt,
+            system=ERROR_ANALYST_PROMPT,
+            model="qwen3.5:4b"
+        )
+
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
 
         result = json.loads(text)
+
         decision_str = result.get("decision", "replan").lower()
         decision_map = {
-            "retry":  ErrorDecision.RETRY,
-            "skip":   ErrorDecision.SKIP,
+            "retry": ErrorDecision.RETRY,
+            "skip": ErrorDecision.SKIP,
             "replan": ErrorDecision.REPLAN,
-            "abort":  ErrorDecision.ABORT,
+            "abort": ErrorDecision.ABORT,
         }
+
         result["decision"] = decision_map.get(decision_str, ErrorDecision.REPLAN)
 
-
         if step.get("critical") and result["decision"] == ErrorDecision.SKIP:
-            result["decision"]     = ErrorDecision.REPLAN
+            result["decision"] = ErrorDecision.REPLAN
             result["user_message"] = "This step is critical — finding alternative approach, sir."
 
         print(f"[ErrorHandler] Decision: {result['decision'].value} — {result.get('reason', '')}")
         return result
 
     except Exception as e:
-        print(f"[ErrorHandler] ⚠️ Analysis failed: {e} — defaulting to replan")
+        print(f"[ErrorHandler] Analysis failed: {e} — defaulting to replan")
         return {
-            "decision":       ErrorDecision.REPLAN,
-            "reason":         str(e),
+            "decision": ErrorDecision.REPLAN,
+            "reason": str(e),
             "fix_suggestion": "Try alternative approach",
-            "max_retries":    1,
-            "user_message":   "Encountered an issue, adjusting approach, sir."
+            "max_retries": 1,
+            "user_message": "Encountered an issue, adjusting approach, sir."
         }
 
 
 def generate_fix(step: dict, error: str, fix_suggestion: str) -> dict:
-    """
-    When decision is REPLAN and a fix suggestion exists,
-    generates a replacement step using generated_code as fallback.
-
-    Returns a modified step dict.
-    """
-    import google.generativeai as genai
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(model_name="gemini-2.0-flash")
+    from agent.local_llm import ask_ollama
 
     prompt = f"""A task step failed. Generate a replacement step.
 
@@ -160,38 +127,56 @@ Tool: {step.get('tool')}
 Description: {step.get('description')}
 Parameters: {json.dumps(step.get('parameters', {}), indent=2)}
 
-Error: {error[:300]}
-Fix suggestion: {fix_suggestion}
+Error:
+{error[:300]}
 
-Write a Python script that accomplishes the same goal differently.
-Return ONLY the Python code, no explanation."""
+Fix suggestion:
+{fix_suggestion}
+
+Return ONLY valid JSON for a replacement step using one of these tools:
+web_search, browser_control, file_controller, computer_settings, computer_control, screen_process, send_message, reminder, desktop_control, youtube_video, weather_report, flight_finder, code_helper, dev_agent.
+
+JSON format:
+{{
+  "step": {step.get("step")},
+  "tool": "tool_name",
+  "description": "replacement step description",
+  "parameters": {{}},
+  "depends_on": [],
+  "critical": false
+}}"""
 
     try:
-        response = model.generate_content(prompt)
-        code = response.text.strip()
-        code = re.sub(r"```(?:python)?", "", code).strip().rstrip("`").strip()
+        text = ask_ollama(
+            prompt=prompt,
+            system="You generate valid JSON replacement steps for MARK XXV. Return only JSON.",
+            model="qwen3.5:4b"
+        )
 
-        return {
-            "step":        step.get("step"),
-            "tool":        "code_helper",
-            "description": f"Auto-fix for: {step.get('description')}",
-            "parameters": {
-                "action":      "run",
-                "description": fix_suggestion,
-                "code":        code,
-                "language":    "python"
-            },
-            "depends_on": step.get("depends_on", []),
-            "critical":   step.get("critical", False)
-        }
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        new_step = json.loads(text)
+
+        if "tool" not in new_step or "parameters" not in new_step:
+            raise ValueError("Invalid replacement step structure")
+
+        new_step.setdefault("step", step.get("step"))
+        new_step.setdefault("description", f"Auto-fix for: {step.get('description')}")
+        new_step.setdefault("depends_on", step.get("depends_on", []))
+        new_step.setdefault("critical", step.get("critical", False))
+
+        return new_step
 
     except Exception as e:
-        print(f"[ErrorHandler] ⚠️ Fix generation failed: {e}")
+        print(f"[ErrorHandler] Fix generation failed: {e}")
         return {
-            "step":        step.get("step"),
-            "tool":        "generated_code",
+            "step": step.get("step"),
+            "tool": "code_helper",
             "description": f"Fallback for: {step.get('description')}",
-            "parameters":  {"description": step.get("description", "")},
-            "depends_on":  step.get("depends_on", []),
-            "critical":    step.get("critical", False)
+            "parameters": {
+                "action": "auto",
+                "description": fix_suggestion or step.get("description", ""),
+                "language": "python"
+            },
+            "depends_on": step.get("depends_on", []),
+            "critical": step.get("critical", False)
         }

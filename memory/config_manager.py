@@ -11,13 +11,26 @@ BASE_DIR    = get_base_dir()
 CONFIG_DIR  = BASE_DIR / "config"
 CONFIG_FILE = CONFIG_DIR / "api_keys.json"
 
+def _detect_os() -> str:
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "mac"
+    return "linux"
+
 def ensure_config_dir() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 def config_exists() -> bool:
     return CONFIG_FILE.exists()
 
-def save_api_keys(gemini_api_key: str) -> None:
+def save_api_keys(gemini_api_key: str = "local_mode") -> None:
+    """Compatibility function.
+
+    The original project required a Gemini API key.
+    In local/Ollama mode, we keep a harmless placeholder so older UI code
+    that reads config/api_keys.json does not block startup.
+    """
     ensure_config_dir()
 
     data: dict = {}
@@ -27,7 +40,9 @@ def save_api_keys(gemini_api_key: str) -> None:
         except Exception:
             data = {}
 
-    data["gemini_api_key"] = gemini_api_key.strip()
+    data["gemini_api_key"] = gemini_api_key.strip() or "local_mode"
+    data.setdefault("os_system", _detect_os())
+    data["llm_provider"] = "ollama"
 
     CONFIG_FILE.write_text(
         json.dumps(data, indent=2),
@@ -44,8 +59,32 @@ def load_api_keys() -> dict:
         return {}
 
 def get_gemini_key() -> str | None:
-    return load_api_keys().get("gemini_api_key")
+    # Kept for backward compatibility with old code paths.
+    return load_api_keys().get("gemini_api_key", "local_mode")
+
+def ensure_local_config() -> dict:
+    """Create a valid local-mode config if it does not exist."""
+    ensure_config_dir()
+    data = load_api_keys()
+    changed = False
+
+    if not data.get("gemini_api_key"):
+        data["gemini_api_key"] = "local_mode"
+        changed = True
+
+    if not data.get("os_system"):
+        data["os_system"] = _detect_os()
+        changed = True
+
+    if data.get("llm_provider") != "ollama":
+        data["llm_provider"] = "ollama"
+        changed = True
+
+    if changed:
+        CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    return data
 
 def is_configured() -> bool:
-    key = get_gemini_key()
-    return bool(key and len(key) > 15)
+    ensure_local_config()
+    return True

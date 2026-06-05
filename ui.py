@@ -888,18 +888,20 @@ class SetupOverlay(QWidget):
             return w
 
         layout.addWidget(_lbl("◈  INITIALISATION REQUIRED", 13, True))
-        layout.addWidget(_lbl("Configure J.A.R.V.I.S. before first boot.", 9, color=C.PRI_DIM))
+        layout.addWidget(_lbl("Local Ollama mode enabled. No Gemini API key required.", 9, color=C.PRI_DIM))
         layout.addSpacing(6)
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"color: {C.BORDER};"); layout.addWidget(sep)
         layout.addSpacing(4)
 
-        layout.addWidget(_lbl("GEMINI API KEY", 8, color=C.TEXT_DIM,
+        layout.addWidget(_lbl("LOCAL MODE", 8, color=C.TEXT_DIM,
                                align=Qt.AlignmentFlag.AlignLeft))
         self._key_input = QLineEdit()
-        self._key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._key_input.setPlaceholderText("AIza…")
+        self._key_input.setText("local_mode")
+        self._key_input.setEnabled(False)
+        self._key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+        self._key_input.setPlaceholderText("local_mode")
         self._key_input.setFont(QFont("Courier New", 10))
         self._key_input.setFixedHeight(32)
         self._key_input.setStyleSheet(f"""
@@ -936,7 +938,7 @@ class SetupOverlay(QWidget):
         self._sel(detected)
         layout.addSpacing(12)
 
-        init_btn = QPushButton("▸  INITIALISE SYSTEMS")
+        init_btn = QPushButton("▸  START LOCAL SYSTEM")
         init_btn.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
         init_btn.setFixedHeight(36)
         init_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -974,13 +976,7 @@ class SetupOverlay(QWidget):
                 """)
 
     def _submit(self):
-        key = self._key_input.text().strip()
-        if not key:
-            self._key_input.setStyleSheet(
-                self._key_input.styleSheet() +
-                f" QLineEdit {{ border: 1px solid {C.RED}; }}"
-            )
-            return
+        key = self._key_input.text().strip() or "local_mode"
         self.done.emit(key, self._sel_os)
 
 
@@ -1414,12 +1410,29 @@ class MainWindow(QMainWindow):
         self.hud.speaking = (state == "SPEAKING")
 
     def _check_config(self) -> bool:
-        if not API_FILE.exists(): return False
+        """Local/Ollama mode: never block startup on a Gemini key.
+
+        A small compatibility config file is created so older modules that still
+        read config/api_keys.json continue to work.
+        """
         try:
-            d = json.loads(API_FILE.read_text(encoding="utf-8"))
-            return bool(d.get("gemini_api_key")) and bool(d.get("os_system"))
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            data = {}
+            if API_FILE.exists():
+                try:
+                    data = json.loads(API_FILE.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+
+            detected = {"Darwin": "mac", "Windows": "windows"}.get(_OS, "linux")
+            data.setdefault("gemini_api_key", "local_mode")
+            data.setdefault("os_system", detected)
+            data["llm_provider"] = "ollama"
+
+            API_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+            return True
         except Exception:
-            return False
+            return True
 
     def _show_setup(self):
         ov = SetupOverlay(self.centralWidget())
@@ -1437,7 +1450,7 @@ class MainWindow(QMainWindow):
     def _on_setup_done(self, key: str, os_name: str):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         API_FILE.write_text(
-            json.dumps({"gemini_api_key": key, "os_system": os_name}, indent=4),
+            json.dumps({"gemini_api_key": key or "local_mode", "os_system": os_name, "llm_provider": "ollama"}, indent=4),
             encoding="utf-8",
         )
         self._ready = True
@@ -1492,8 +1505,8 @@ class JarvisUI:
         self._win._log_sig.emit(text)
 
     def wait_for_api_key(self):
-        while not self._win._ready:
-            time.sleep(0.1)
+        # Local/Ollama mode: no external API key is required.
+        return
 
     def start_speaking(self):
         self.set_state("SPEAKING")

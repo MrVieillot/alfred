@@ -166,28 +166,23 @@ OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
 """
 
 
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-
 
 def create_plan(goal: str, context: str = "") -> dict:
-    import google.generativeai as genai
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash-lite",
-        system_instruction=PLANNER_PROMPT
-    )
+    from agent.local_llm import ask_ollama
 
     user_input = f"Goal: {goal}"
+
     if context:
         user_input += f"\n\nContext: {context}"
 
     try:
-        response = model.generate_content(user_input)
-        text     = response.text.strip()
-        text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        text = ask_ollama(
+            prompt=user_input,
+            system=PLANNER_PROMPT,
+            model="qwen3.5:4b"
+        )
+
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
 
         plan = json.loads(text)
 
@@ -195,23 +190,25 @@ def create_plan(goal: str, context: str = "") -> dict:
             raise ValueError("Invalid plan structure")
 
         for step in plan["steps"]:
-            if step.get("tool") in ("generated_code",):
-                print(f"[Planner] ⚠️ generated_code detected in step {step.get('step')} — replacing with web_search")
+            if step.get("tool") == "generated_code":
+                print(
+                    f"[Planner] generated_code detected in step "
+                    f"{step.get('step')} — replacing with web_search"
+                )
                 desc = step.get("description", goal)
                 step["tool"] = "web_search"
                 step["parameters"] = {"query": desc[:200]}
 
-        print(f"[Planner] ✅ Plan: {len(plan['steps'])} steps")
-        for s in plan["steps"]:
-            print(f"  Step {s['step']}: [{s['tool']}] {s['description']}")
+        print(f"[Planner] Plan: {len(plan['steps'])} steps")
 
         return plan
 
     except json.JSONDecodeError as e:
-        print(f"[Planner] ⚠️ JSON parse failed: {e}")
+        print(f"[Planner] JSON parse failed: {e}")
         return _fallback_plan(goal)
+
     except Exception as e:
-        print(f"[Planner] ⚠️ Planning failed: {e}")
+        print(f"[Planner] Planning failed: {e}")
         return _fallback_plan(goal)
 
 
@@ -232,16 +229,11 @@ def _fallback_plan(goal: str) -> dict:
 
 
 def replan(goal: str, completed_steps: list, failed_step: dict, error: str) -> dict:
-    import google.generativeai as genai
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=PLANNER_PROMPT
-    )
+    from agent.local_llm import ask_ollama
 
     completed_summary = "\n".join(
-        f"  - Step {s['step']} ({s['tool']}): DONE" for s in completed_steps
+        f"  - Step {s['step']} ({s['tool']}): DONE"
+        for s in completed_steps
     )
 
     prompt = f"""Goal: {goal}
@@ -250,23 +242,44 @@ Already completed:
 {completed_summary if completed_summary else '  (none)'}
 
 Failed step: [{failed_step.get('tool')}] {failed_step.get('description')}
-Error: {error}
 
-Create a REVISED plan for the remaining work only. Do not repeat completed steps."""
+Failed parameters:
+{json.dumps(failed_step.get('parameters', {}), indent=2)}
+
+Error:
+{error}
+
+Create a REVISED plan for the remaining work only.
+Do not repeat completed steps.
+Return ONLY valid JSON, no markdown, no explanation."""
 
     try:
-        response = model.generate_content(prompt)
-        text     = response.text.strip()
-        text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
-        plan     = json.loads(text)
+        text = ask_ollama(
+            prompt=prompt,
+            system=PLANNER_PROMPT,
+            model="qwen3.5:4b"
+        )
 
-        for step in plan.get("steps", []):
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        plan = json.loads(text)
+
+        if "steps" not in plan or not isinstance(plan["steps"], list):
+            raise ValueError("Invalid revised plan structure")
+
+        for step in plan["steps"]:
             if step.get("tool") == "generated_code":
                 step["tool"] = "web_search"
-                step["parameters"] = {"query": step.get("description", goal)[:200]}
+                step["parameters"] = {
+                    "query": step.get("description", goal)[:200]
+                }
 
-        print(f"[Planner] 🔄 Revised plan: {len(plan['steps'])} steps")
+        print(f"[Planner] Revised plan: {len(plan['steps'])} steps")
         return plan
+
+    except json.JSONDecodeError as e:
+        print(f"[Planner] Replan JSON parse failed: {e}")
+        return _fallback_plan(goal)
+
     except Exception as e:
-        print(f"[Planner] ⚠️ Replan failed: {e}")
+        print(f"[Planner] Replan failed: {e}")
         return _fallback_plan(goal)

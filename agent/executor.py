@@ -27,47 +27,47 @@ def _get_api_key() -> str:
         return json.load(f)["gemini_api_key"]
 
 def _run_generated_code(description: str, speak: Callable | None = None) -> str:
-    import google.generativeai as genai
+    from agent.local_llm import ask_ollama
 
     if speak:
         speak("Writing custom code for this task, sir.")
 
-    home      = Path.home()
-    desktop   = home / "Desktop"
+    home = Path.home()
+    desktop = home / "Desktop"
     downloads = home / "Downloads"
     documents = home / "Documents"
 
     if not desktop.exists():
         try:
             import winreg
-            key     = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders")
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+            )
             desktop = Path(winreg.QueryValueEx(key, "Desktop")[0])
         except Exception:
             pass
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=(
-            "You are an expert Python developer. "
-            "Write clean, complete, working Python code. "
-            "Use standard library + common packages. "
-            "Install missing packages with subprocess + pip if needed. "
-            "Return ONLY the Python code. No explanation, no markdown, no backticks.\n\n"
-            f"SYSTEM PATHS:\n"
-            f"  Desktop   = r'{desktop}'\n"
-            f"  Downloads = r'{downloads}'\n"
-            f"  Documents = r'{documents}'\n"
-            f"  Home      = r'{home}'\n"
-        )
+    system_prompt = (
+        "You are an expert Python developer. "
+        "Write clean, complete, working Python code. "
+        "Use standard library + common packages. "
+        "Install missing packages with subprocess + pip if needed. "
+        "Return ONLY the Python code. No explanation, no markdown, no backticks.\n\n"
+        f"SYSTEM PATHS:\n"
+        f"  Desktop   = r'{desktop}'\n"
+        f"  Downloads = r'{downloads}'\n"
+        f"  Documents = r'{documents}'\n"
+        f"  Home      = r'{home}'\n"
     )
 
     try:
-        response = model.generate_content(
-            f"Write Python code to accomplish this task:\n\n{description}"
+        code = ask_ollama(
+            prompt=f"Write Python code to accomplish this task:\n\n{description}",
+            system=system_prompt,
+            model="qwen3.5:4b"
         )
-        code = response.text.strip()
+
         code = re.sub(r"```(?:python)?", "", code).strip().rstrip("`").strip()
 
         with tempfile.NamedTemporaryFile(
@@ -76,12 +76,14 @@ def _run_generated_code(description: str, speak: Callable | None = None) -> str:
             f.write(code)
             tmp_path = f.name
 
-        print(f"[Executor] 🐍 Running generated code: {tmp_path}")
+        print(f"[Executor] Running generated code: {tmp_path}")
 
         result = subprocess.run(
             [sys.executable, tmp_path],
-            capture_output=True, text=True,
-            timeout=120, cwd=str(Path.home())
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(Path.home())
         )
 
         try:
@@ -90,7 +92,7 @@ def _run_generated_code(description: str, speak: Callable | None = None) -> str:
             pass
 
         output = result.stdout.strip()
-        error  = result.stderr.strip()
+        error = result.stderr.strip()
 
         if result.returncode == 0 and output:
             return output
@@ -98,6 +100,7 @@ def _run_generated_code(description: str, speak: Callable | None = None) -> str:
             return "Task completed successfully."
         elif error:
             raise RuntimeError(f"Code error: {error[:400]}")
+
         return "Completed."
 
     except subprocess.TimeoutExpired:
@@ -128,33 +131,34 @@ def _inject_context(params: dict, tool: str, step_results: dict, goal: str = "")
 
     return params
 def _detect_language(text: str) -> str:
-    import google.generativeai as genai
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel("gemini-2.5-flash-lite")
+    from agent.local_llm import ask_ollama
+
     try:
-        response = model.generate_content(
-            f"What language is this text written in? "
-            f"Reply with ONLY the language name in English (e.g. Turkish, English, French).\n\n"
-            f"Text: {text[:200]}"
-        )
-        return response.text.strip()
+        return ask_ollama(
+            prompt=(
+                "What language is this text written in? "
+                "Reply with ONLY the language name in English "
+                "(e.g. Turkish, English, French).\n\n"
+                f"Text: {text[:200]}"
+            ),
+            system="You detect languages. Return only the language name.",
+            model="qwen3.5:4b"
+        ).strip()
     except Exception:
         return "English"
 
 
 def _translate_to_goal_language(content: str, goal: str) -> str:
+    from agent.local_llm import ask_ollama
+
     if not goal:
         return content
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=_get_api_key())
-        model = genai.GenerativeModel("gemini-2.5-flash")
 
+    try:
         target_lang = _detect_language(goal)
-        print(f"[Executor] 🌐 Translating to: {target_lang}")
+        print(f"[Executor] Translating to: {target_lang}")
 
         prompt = (
-            f"You are a professional translator. "
             f"Translate the following text into {target_lang}.\n"
             f"IMPORTANT:\n"
             f"- Translate EVERYTHING, leave nothing in English\n"
@@ -163,12 +167,18 @@ def _translate_to_goal_language(content: str, goal: str) -> str:
             f"- Output ONLY the translated text, nothing else\n\n"
             f"Text to translate:\n{content[:4000]}"
         )
-        response = model.generate_content(prompt)
-        translated = response.text.strip()
-        print(f"[Executor] ✅ Translation done ({target_lang})")
-        return translated
+
+        translated = ask_ollama(
+            prompt=prompt,
+            system="You are a professional translator. Return only the translated text.",
+            model="qwen3.5:4b"
+        )
+
+        print(f"[Executor] Translation done ({target_lang})")
+        return translated.strip()
+
     except Exception as e:
-        print(f"[Executor] ⚠️ Translation failed: {e}")
+        print(f"[Executor] Translation failed: {e}")
         return content
 
 def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
@@ -375,22 +385,35 @@ class AgentExecutor:
             plan = replan(goal, completed_steps, failed_step, failed_error)
 
     def _summarize(self, goal: str, completed_steps: list, speak: Callable | None) -> str:
-        fallback = f"All done, sir. Completed {len(completed_steps)} steps for: {goal[:60]}."
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=_get_api_key())
-            model     = genai.GenerativeModel(model_name="gemini-2.5-flash-lite")
-            steps_str = "\n".join(f"- {s.get('description', '')}" for s in completed_steps)
-            prompt    = (
-                f'User goal: "{goal}"\n'
-                f"Completed steps:\n{steps_str}\n\n"
-                "Write a single natural sentence summarizing what was accomplished. "
-                "Address the user as 'sir'. Be direct and positive."
-            )
-            response = model.generate_content(prompt)
-            summary  = response.text.strip()
-            if speak: speak(summary)
-            return summary
-        except Exception:
-            if speak: speak(fallback)
-            return fallback
+    from agent.local_llm import ask_ollama
+
+    fallback = f"All done, sir. Completed {len(completed_steps)} steps for: {goal[:60]}."
+
+    try:
+        steps_str = "\n".join(
+            f"- {s.get('description', '')}"
+            for s in completed_steps
+        )
+
+        prompt = (
+            f'User goal: "{goal}"\n'
+            f"Completed steps:\n{steps_str}\n\n"
+            "Write a single natural sentence summarizing what was accomplished. "
+            "Address the user as 'sir'. Be direct and positive."
+        )
+
+        summary = ask_ollama(
+            prompt=prompt,
+            system="You summarize completed assistant tasks in one short sentence.",
+            model="qwen3.5:4b"
+        ).strip()
+
+        if speak:
+            speak(summary)
+
+        return summary
+
+    except Exception:
+        if speak:
+            speak(fallback)
+        return fallback

@@ -43,8 +43,6 @@ def _get_os() -> str:
     return _load_config().get("os_system", "windows").lower()
 
 
-def _get_api_key() -> str:
-    return _load_config().get("gemini_api_key", "")
 
 _SAFE_SCREENSHOT_ROOTS = (
     Path.home(),
