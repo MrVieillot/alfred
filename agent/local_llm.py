@@ -1,5 +1,6 @@
 import requests
 
+
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen3.5:4b"
 
@@ -24,4 +25,5 @@ def ask_ollama(prompt: str, system: str = "", model: str = DEFAULT_MODEL) -> str
         timeout=300
     )
     r.raise_for_status()
+    
     return r.json()["message"]["content"].strip()

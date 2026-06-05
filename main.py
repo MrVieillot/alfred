@@ -607,7 +607,7 @@ class JarvisLocal:
             Do not list every result.
             Speak naturally as if talking to the user.
             """,
-                model="qwen3.5:4b"
+                model="qwen3.5:0.8b"
             )
 
             self.speak(spoken_summary.strip())
@@ -667,7 +667,7 @@ class JarvisLocal:
             {result}
             """,
                     system="You are JARVIS. Speak naturally and concisely.",
-                    model="qwen3.5:4b"
+                    model="qwen3.5:0.8b"
                 )
 
                 self.speak(spoken_summary.strip())
@@ -714,7 +714,7 @@ class JarvisLocal:
             raw = ask_ollama(
                 prompt=f"User command: {text}",
                 system=self._build_system_prompt(),
-                model="qwen3.5:4b"
+                model="qwen3.5:0.8b"
             )
 
             data = self._extract_json(raw)

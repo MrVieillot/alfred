@@ -30,7 +30,7 @@ def _ask_local(prompt: str, system: str = "", model: str = "qwen3.5-uncensored:9
     return ask_ollama(
         prompt=prompt,
         system=system,
-        model=model
+        model="qwen3.5:4b"
     ).strip()
 
 
@@ -410,6 +410,34 @@ Optimized code:"""
         save_path = _resolve_save_path(output_path, lang)
 
     status = _save_file(save_path, optimized)
+    test_output = _run_file(save_path, [], 5)
+
+    if _has_error(test_output):
+        print("[Code] Optimized code has errors, fixing...")
+
+        try:
+            fixed = _fix_code(
+                optimized,
+                test_output,
+                f"Fix this {lang} code. Return complete working code only."
+            )
+
+            _save_file(save_path, fixed)
+            second_test = _run_file(save_path, [], 5)
+
+            if _has_error(second_test):
+                _save_file(save_path, original_code)
+                return (
+                    "Optimization failed validation, sir. "
+                    "I restored the original file to avoid leaving broken code.\n\n"
+                    f"Error after attempted fix:\n{second_test}"
+                )
+
+            optimized = fixed
+
+        except Exception as e:
+            _save_file(save_path, original_code)
+            return f"Optimization failed and original file was restored: {e}"
     print(f"[Code] ✅ Optimized: {save_path}")
 
     original_lines  = len(code.splitlines())
@@ -417,7 +445,7 @@ Optimized code:"""
     diff = original_lines - optimized_lines
 
     return (
-        f"Code optimized. {status}\n"
+        f"Code optimized and tested. {status}\n"
         f"Lines: {original_lines} → {optimized_lines} "
         f"({'−' if diff > 0 else '+'}{abs(diff)} lines)\n\n"
         f"Preview:\n{_preview(optimized)}"
