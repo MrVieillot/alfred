@@ -24,13 +24,13 @@ def _clean_code(text: str) -> str:
     text = re.sub(r"\n?```$", "", text)
     return text.strip()
 
-def _ask_local(prompt: str, system: str = "", model: str = "qwen3.5-uncensored:9b") -> str:
+def _ask_local(prompt: str, system: str = "", model: str = "qwen2.5-coder:7b") -> str:
     from agent.local_llm import ask_ollama
 
     return ask_ollama(
         prompt=prompt,
         system=system,
-        model="qwen3.5:4b"
+        model="qwen2.5-coder:7b"
     ).strip()
 
 

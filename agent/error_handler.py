@@ -82,7 +82,7 @@ Attempt number: {attempt}"""
         text = ask_ollama(
             prompt=prompt,
             system=ERROR_ANALYST_PROMPT,
-            model="qwen3.5:4b"
+            model="kamekichi128/qwen3-4b-instruct-2507"
         )
 
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
@@ -150,7 +150,7 @@ JSON format:
         text = ask_ollama(
             prompt=prompt,
             system="You generate valid JSON replacement steps for MARK XXV. Return only JSON.",
-            model="qwen3.5:4b"
+            model="kamekichi128/qwen3-4b-instruct-2507"
         )
 
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
