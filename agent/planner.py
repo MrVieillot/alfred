@@ -11,11 +11,14 @@ def get_base_dir() -> Path:
 
 
 BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+
 
 
 PLANNER_PROMPT = """You are the planning module of MARK XXV, a personal AI assistant.
 Your job: break any user goal into a sequence of steps using ONLY the tools listed below.
+
+If the user asks to create/build/make/develop an app, game, website, GUI, Flask/Django/FastAPI project, or software project, use the dev_agent tool directly.
+Never use web_search + file_controller to generate application code.
 
 ABSOLUTE RULES:
 - NEVER use generated_code or write Python scripts. It does not exist.
@@ -179,7 +182,7 @@ def create_plan(goal: str, context: str = "") -> dict:
         text = ask_ollama(
             prompt=user_input,
             system=PLANNER_PROMPT,
-            model="qwen3.5:4b"
+            model="kamekichi128/qwen3-4b-instruct-2507"
         )
 
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
@@ -257,7 +260,7 @@ Return ONLY valid JSON, no markdown, no explanation."""
         text = ask_ollama(
             prompt=prompt,
             system=PLANNER_PROMPT,
-            model="qwen3.5:4b"
+            model="kamekichi128/qwen3-4b-instruct-2507"
         )
 
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()

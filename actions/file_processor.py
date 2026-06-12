@@ -25,19 +25,22 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 
-import google.generativeai as genai
+MODEL_TEXT = "kamekichi128/qwen3-4b-instruct-2507"
+MODEL_CODE = "qwen2.5-coder:7b"
 
+def _ask_local(prompt: str, system: str = "", model: str = MODEL_TEXT) -> str:
+    from agent.local_llm import ask_ollama
 
-def _get_api_key() -> str:
-    config_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
-    with open(config_path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    print("=" * 50)
+    print("[FileProcessor MODEL]", model)
+    print("[FileProcessor PROMPT]", prompt[:200])
+    print("=" * 50)
 
-
-def _gemini_client():
-    genai.configure(api_key=_get_api_key())
-    return genai.GenerativeModel("gemini-2.5-flash")
-
+    return ask_ollama(
+        prompt=prompt,
+        system=system,
+        model=model
+    ).strip()
 
 def _detect_type(path: Path) -> str:
     ext = path.suffix.lower().lstrip(".")
@@ -86,30 +89,10 @@ def _process_image(path: Path, action: str, params: dict, speak=None) -> str:
     action = action or "describe"
 
     if action in ("describe", "ocr", "analyze", "read", "extract_text"):
-        try:
-            model  = _gemini_client()
-            img    = Image.open(path)
-            prompt = {
-                "describe": "Describe this image in detail.",
-                "ocr":      "Extract all text visible in this image. Return only the text, formatted clearly.",
-                "analyze":  "Analyze this image thoroughly: objects, colors, composition, any text, context.",
-                "read":     "Read all text in this image, preserving structure and formatting.",
-                "extract_text": "Extract all text from this image.",
-            }.get(action, "Describe this image.")
-
-            if params.get("instruction"):
-                prompt = params["instruction"]
-
-            response = model.generate_content([prompt, img])
-            result   = response.text.strip()
-
-            if len(result) > 500 and params.get("save", True):
-                out = _output_path(path, "result", ".txt")
-                out.write_text(result, encoding="utf-8")
-                return f"{result[:300]}...\n\nFull result saved to: {out}"
-            return result
-        except Exception as e:
-            return f"AI image analysis failed: {e}"
+        return (
+            "Local image analysis is not available yet. "
+            "We need to connect a local vision model such as llava, minicpm-v, or qwen-vl."
+        )
 
     if action == "resize":
         width  = int(params.get("width",  0))
@@ -207,9 +190,13 @@ def _process_pdf(path: Path, action: str, params: dict, speak=None) -> str:
             "reformat":       f"Reformat this text cleanly with proper structure:\n\n{text}",
         }
         try:
-            model    = _gemini_client()
-            response = model.generate_content(prompt_map.get(action, f"Analyze:\n\n{text}"))
-            result   = response.text.strip()
+            prompt = prompt_map.get(action, f"Analyze:\n\n{text}")
+
+            result = _ask_local(
+                prompt,
+                system="You are JARVIS. Summarize and analyze documents clearly.",
+                model=MODEL_TEXT
+            )
             if len(result) > 600 and params.get("save", True):
                 out = _output_path(path, action, ".txt")
                 out.write_text(result, encoding="utf-8")
@@ -297,9 +284,11 @@ def _process_text_doc(path: Path, file_type: str, action: str,
         instruction = action
 
     try:
-        model    = _gemini_client()
-        response = model.generate_content(prompt_map[action])
-        result   = response.text.strip()
+        result = _ask_local(
+            prompt_map[action],
+            system="You are JARVIS. Process text documents clearly and concisely.",
+            model=MODEL_TEXT
+        )
         if len(result) > 600 and params.get("save", True):
             out = _output_path(path, action, ".txt")
             out.write_text(result, encoding="utf-8")
@@ -344,9 +333,11 @@ def _process_data(path: Path, file_type: str, action: str,
                    f"Rows: {len(df)}\nPreview:\n{preview}\n\n"
                    f"Give insights, patterns, and notable findings.")
         try:
-            model    = _gemini_client()
-            response = model.generate_content(prompt)
-            return response.text.strip()
+            return _ask_local(
+                prompt,
+                system="You are a data analyst. Give concise insights from the dataset preview.",
+                model=MODEL_TEXT
+            )
         except Exception as e:
             return f"AI analysis failed: {e}"
 
@@ -398,11 +389,11 @@ def _process_data(path: Path, file_type: str, action: str,
 
     preview = df.head(30).to_string()
     try:
-        model    = _gemini_client()
-        response = model.generate_content(
-            f"Task: {action}\nDataset ({len(df)} rows, cols: {list(df.columns)}):\n{preview}"
+        return _ask_local(
+            f"Task: {action}\nDataset ({len(df)} rows, cols: {list(df.columns)}):\n{preview}",
+            system="You are a data analyst. Process the dataset request clearly.",
+            model=MODEL_TEXT
         )
-        return response.text.strip()
     except Exception as e:
         return f"Processing failed: {e}"
 
@@ -429,9 +420,11 @@ def _process_json(path: Path, action: str, params: dict, speak=None) -> str:
         if params.get("instruction"):
             prompt = f"{params['instruction']}\n\nJSON data:\n{preview}"
         try:
-            model    = _gemini_client()
-            response = model.generate_content(prompt)
-            return response.text.strip()
+            return _ask_local(
+                prompt,
+                system="You are JARVIS. Analyze JSON data clearly.",
+                model=MODEL_TEXT
+            )
         except Exception as e:
             return f"AI processing failed: {e}"
 
@@ -493,9 +486,11 @@ def _process_code(path: Path, action: str, params: dict, speak=None) -> str:
         prompt = prompt_map[action]
 
     try:
-        model    = _gemini_client()
-        response = model.generate_content(prompt)
-        result   = response.text.strip()
+        result = _ask_local(
+            prompt,
+            system="You are an expert software developer. For fix/optimize/document actions, return complete useful code when needed.",
+            model=MODEL_CODE
+        )
 
         if action in ("fix", "optimize", "document") and params.get("save", True):
             out = _output_path(path, action)
@@ -526,26 +521,10 @@ def _process_audio(path: Path, action: str, params: dict, speak=None) -> str:
             return f"Info failed: {e}"
 
     if action == "transcribe":
-        try:
-            model   = _gemini_client()
-            content = path.read_bytes()
-            mime    = {
-                "mp3": "audio/mp3", "wav": "audio/wav",
-                "ogg": "audio/ogg", "m4a": "audio/mp4",
-                "aac": "audio/aac", "flac": "audio/flac",
-            }.get(path.suffix.lstrip(".").lower(), "audio/mpeg")
-            response = model.generate_content([
-                "Transcribe all speech in this audio file accurately.",
-                {"mime_type": mime, "data": content}
-            ])
-            result = response.text.strip()
-            if params.get("save", True):
-                out = _output_path(path, "transcript", ".txt")
-                out.write_text(result, encoding="utf-8")
-                return f"Transcription saved: {out.name}\n\nPreview: {result[:300]}"
-            return result
-        except Exception as e:
-            return f"Transcription failed: {e}"
+        return (
+            "Local audio transcription is not available yet. "
+            "We need to connect Whisper or faster-whisper locally."
+        )
 
     if action == "convert":
         fmt = params.get("format", "mp3").lstrip(".")
@@ -764,10 +743,13 @@ def _process_pptx(path: Path, action: str, params: dict, speak=None) -> str:
             out.write_text(text, encoding="utf-8")
             return f"Text extracted. Saved: {out.name}"
         try:
-            model    = _gemini_client()
-            prompt   = f"{'Summarize' if action == 'summarize' else 'Analyze'} this presentation:\n{text[:30000]}"
-            response = model.generate_content(prompt)
-            return response.text.strip()
+            prompt = f"{'Summarize' if action == 'summarize' else 'Analyze'} this presentation:\n{text[:30000]}"
+
+            return _ask_local(
+                prompt,
+                system="You are JARVIS. Summarize presentations clearly.",
+                model=MODEL_TEXT
+            )
         except Exception as e:
             return f"AI processing failed: {e}"
 
@@ -797,10 +779,17 @@ def file_processor(parameters: dict, player=None, speak=None) -> str:
     if file_type == "unknown":
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")[:10000]
-            model   = _gemini_client()
-            prompt  = f"File: {path.name}\nContent preview:\n{content}\n\nTask: {action or instruction or 'Describe what this file contains and what can be done with it.'}"
-            response = model.generate_content(prompt)
-            return response.text.strip()
+            prompt = (
+                f"File: {path.name}\n"
+                f"Content preview:\n{content}\n\n"
+                f"Task: {action or instruction or 'Describe what this file contains and what can be done with it.'}"
+            )
+
+            return _ask_local(
+                prompt,
+                system="You are JARVIS. Identify and explain unknown file contents.",
+                model=MODEL_TEXT
+            )
         except Exception as e:
             return f"Unknown file type ({path.suffix}). Could not process: {e}"
 

@@ -560,6 +560,7 @@ class JarvisLocal:
 
     def _handle_command_sync(self, text: str):
         from agent.local_llm import ask_ollama
+        from pathlib import Path
 
         text = text.strip()
         if not text:
@@ -567,6 +568,7 @@ class JarvisLocal:
 
         lowered = text.lower()
 
+        # 1) Recherche web directe
         if lowered.startswith(("search ", "search the web for ", "look up ", "google ")):
             query = text
 
@@ -587,26 +589,24 @@ class JarvisLocal:
             )
 
             self.ui.write_log(result)
-            from agent.local_llm import ask_ollama
 
             spoken_summary = ask_ollama(
                 prompt=f"""
-            Summarize these search results in 2-3 short spoken sentences.
+    Summarize these search results in 2-3 short spoken sentences.
 
-            Search query:
-            {query}
+    Search query:
+    {query}
 
-            Results:
-            {result}
-            """,
+    Results:
+    {result}
+    """,
                 system="""
-            You are JARVIS.
-
-            Give a concise spoken summary.
-            Do not read URLs.
-            Do not list every result.
-            Speak naturally as if talking to the user.
-            """,
+    You are JARVIS.
+    Give a concise spoken summary.
+    Do not read URLs.
+    Do not list every result.
+    Speak naturally as if talking to the user.
+    """,
                 model="kamekichi128/qwen3-4b-instruct-2507"
             )
 
@@ -617,10 +617,8 @@ class JarvisLocal:
 
             return
 
+        # 2) Explication / optimisation de fichiers
         if lowered.startswith(("explain ", "optimize ", "improve ", "refactor ")):
-            import os
-            from pathlib import Path
-
             words = text.split()
             action_word = words[0].lower()
             filename = words[-1].strip('"')
@@ -657,23 +655,57 @@ class JarvisLocal:
             if action == "optimize":
                 self.speak("I optimized the Python file, sir.")
             else:
-                from agent.local_llm import ask_ollama
-
                 spoken_summary = ask_ollama(
                     prompt=f"""
-            Summarize the following code analysis in 2-3 short sentences.
+    Summarize the following code analysis in 2-3 short sentences.
 
-            Analysis:
-            {result}
-            """,
+    Analysis:
+    {result}
+    """,
                     system="You are JARVIS. Speak naturally and concisely.",
-                    model="qwen2.5-coder:7b"
+                    model="kamekichi128/qwen3-4b-instruct-2507"
                 )
 
                 self.speak(spoken_summary.strip())
 
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+
             return
 
+        # 3) Projets complets -> dev_agent
+        dev_keywords = (
+            "app", "application", "flask", "django", "fastapi",
+            "game", "gui", "tkinter", "website", "web app",
+            "project", "software"
+        )
+
+        create_keywords = (
+            "create ", "build ", "make ", "develop ", "generate "
+        )
+
+        if lowered.startswith(create_keywords) and any(k in lowered for k in dev_keywords):
+            self.ui.write_log(f"You: {text}")
+            self.ui.set_state("THINKING")
+
+            result = self._execute_tool_sync(
+                "dev_agent",
+                {
+                    "description": text,
+                    "language": "python",
+                    "project_name": ""
+                }
+            )
+
+            self.ui.write_log(result)
+            self.speak("I created the project, sir.")
+
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+
+            return
+
+        # 4) Script Python simple -> code_helper
         code_prefixes = (
             "create a python",
             "write a python",
@@ -707,6 +739,73 @@ class JarvisLocal:
 
             return
 
+        if lowered.startswith(("create a file ", "create file ")):
+            import re
+
+            match = re.search(
+                r'create (?:a )?file\s+(.+?)\s+with written in it\s*:\s*["“](.+?)["”]\s*$',
+                text,
+                re.IGNORECASE | re.DOTALL
+            )
+
+            if match:
+                filename = match.group(1).strip()
+                content = match.group(2).strip()
+
+                result = self._execute_tool_sync(
+                    "file_controller",
+                    {
+                        "action": "create_file",
+                        "path": "desktop",
+                        "name": filename,
+                        "content": content
+                    }
+                )
+
+                self.ui.write_log(result)
+                self.speak("I created the file on your desktop, sir.")
+                return
+
+        if lowered.startswith(("summarize ", "analyse ", "analyze ", "explain file ")):
+            from pathlib import Path
+
+            words = text.split()
+            filename = words[-1].strip('"')
+
+            desktop_path = Path.home() / "Desktop" / filename
+            local_path = Path(filename)
+
+            if desktop_path.exists():
+                file_path = str(desktop_path)
+            elif local_path.exists():
+                file_path = str(local_path.resolve())
+            elif getattr(self.ui, "current_file", None):
+                file_path = self.ui.current_file
+            else:
+                self.speak(f"I cannot find the file {filename}, sir.")
+                return
+
+            action = "summarize"
+            if lowered.startswith(("analyse ", "analyze ")):
+                action = "analyze"
+
+            result = self._execute_tool_sync(
+                "file_processor",
+                {
+                    "file_path": file_path,
+                    "action": action
+                }
+            )
+
+            self.ui.write_log(result)
+            self.speak(result[:600])
+
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+
+            return    
+
+        # 5) Fallback : modèle principal + JSON tools
         self.ui.write_log(f"You: {text}")
         self.ui.set_state("THINKING")
 

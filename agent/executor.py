@@ -384,36 +384,36 @@ class AgentExecutor:
             replan_attempts += 1
             plan = replan(goal, completed_steps, failed_step, failed_error)
 
-    def _summarize(self, goal: str, completed_steps: list, speak: Callable | None) -> str:
-    from agent.local_llm import ask_ollama
+    def _summarize(self, goal: str, completed_steps: list, speak=None) -> str:
+        from agent.local_llm import ask_ollama
 
-    fallback = f"All done, sir. Completed {len(completed_steps)} steps for: {goal[:60]}."
+        fallback = f"All done, sir. Completed {len(completed_steps)} steps for: {goal[:60]}."
 
-    try:
-        steps_str = "\n".join(
-            f"- {s.get('description', '')}"
-            for s in completed_steps
-        )
+        try:
+            steps_str = "\n".join(
+                f"- {s.get('description', '')}"
+                for s in completed_steps
+            )
 
-        prompt = (
-            f'User goal: "{goal}"\n'
-            f"Completed steps:\n{steps_str}\n\n"
-            "Write a single natural sentence summarizing what was accomplished. "
-            "Address the user as 'sir'. Be direct and positive."
-        )
+            prompt = (
+                f'User goal: "{goal}"\n'
+                f"Completed steps:\n{steps_str}\n\n"
+                "Write a single natural sentence summarizing what was accomplished. "
+                "Address the user as 'sir'. Be direct and positive."
+            )
 
-        summary = ask_ollama(
-            prompt=prompt,
-            system="You summarize completed assistant tasks in one short sentence.",
-            model="qwen3.5:4b"
-        ).strip()
+            summary = ask_ollama(
+                prompt=prompt,
+                system="You summarize completed assistant tasks in one short sentence.",
+                model="kamekichi128/qwen3-4b-instruct-2507"
+            ).strip()
 
-        if speak:
-            speak(summary)
+            if speak:
+                speak(summary)
 
-        return summary
+            return summary
 
-    except Exception:
-        if speak:
-            speak(fallback)
-        return fallback
+        except Exception:
+            if speak:
+                speak(fallback)
+            return fallback
