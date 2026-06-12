@@ -3,7 +3,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta 
 from pathlib import Path
 
 from config import is_windows, is_mac, is_linux
@@ -15,12 +15,22 @@ def _get_base_dir() -> Path:
 
 
 BASE_DIR        = _get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 
+MODEL_TEXT = "kamekichi128/qwen3-4b-instruct-2507"
 
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+def _ask_local(prompt: str, system: str = "", model: str = MODEL_TEXT) -> str:
+    from agent.local_llm import ask_ollama
+
+    print("=" * 50)
+    print("[FlightFinder MODEL]", model)
+    print("[FlightFinder PROMPT]", prompt[:200])
+    print("=" * 50)
+
+    return ask_ollama(
+        prompt=prompt,
+        system=system,
+        model=model
+    ).strip()
 
 _MONTH_MAP: dict[str, int] = {
 
@@ -62,19 +72,22 @@ def _parse_date(raw: str) -> str:
             return val.strftime("%Y-%m-%d")
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=_get_api_key())
-        model    = genai.GenerativeModel("gemini-2.5-flash-lite")
-        response = model.generate_content(
-            f"Today is {today.strftime('%Y-%m-%d')}. "
-            f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
-            f"Return ONLY the date string, nothing else."
+        result = _ask_local(
+            prompt=(
+                f"Today is {today.strftime('%Y-%m-%d')}. "
+                f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
+                f"Return ONLY the date string, nothing else."
+            ),
+            system="You convert natural language dates to YYYY-MM-DD. Return only the date.",
+            model=MODEL_TEXT
         )
-        result = response.text.strip()
+
+        result = result.strip()
         if re.match(r"\d{4}-\d{2}-\d{2}", result):
             return result
+
     except Exception as e:
-        print(f"[FlightFinder] ⚠️ Gemini date parse failed: {e}")
+        print(f"[FlightFinder] ⚠️ Local date parse failed: {e}")
 
     for month_name, month_num in _MONTH_MAP.items():
         if month_name in lower:
@@ -146,40 +159,41 @@ def _search_flights_browser(
     raw = browser_control({"action": "get_text"})
     return (raw or ""), url
 
-def _parse_flights_with_gemini(
-    raw_text:    str,
-    origin:      str,
+def _parse_flights_with_ollama(
+    raw_text: str,
+    origin: str,
     destination: str,
-    date:        str,
+    date: str,
 ) -> list[dict]:
-    import google.generativeai as genai
-
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=(
-            "You are a flight data extraction expert. "
-            "Extract flight information from raw webpage text. "
-            "Return ONLY valid JSON — no markdown, no explanation."
-        ),
-    )
-
     prompt = (
         f"Extract flight options from {origin} to {destination} on {date} "
         f"from this Google Flights page text:\n\n{raw_text[:12000]}\n\n"
-        f"Return a JSON array of up to 5 flights:\n"
+        f"Return ONLY a valid JSON array of up to 5 flights:\n"
         f'[{{"airline":"...","departure":"HH:MM","arrival":"HH:MM",'
         f'"duration":"Xh Ym","stops":0,"price":"...","currency":"USD"}}]\n'
-        f"If no flights found, return: []"
+        f"If no flights are found, return exactly: []"
     )
 
     try:
-        response = model.generate_content(prompt)
-        text     = re.sub(r"```(?:json)?", "", response.text).strip().rstrip("`").strip()
-        flights  = json.loads(text)
+        text = _ask_local(
+            prompt=prompt,
+            system=(
+                "You are a flight data extraction expert. "
+                "Return ONLY valid JSON. No markdown. No explanation."
+            ),
+            model=MODEL_TEXT
+        )
+
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        if match:
+            text = match.group(0)
+
+        flights = json.loads(text)
         return flights if isinstance(flights, list) else []
+
     except Exception as e:
-        print(f"[FlightFinder] ⚠️ Gemini parse failed: {e}")
+        print(f"[FlightFinder] ⚠️ Local flight parse failed: {e}")
         return []
 
 def _format_spoken(
@@ -340,7 +354,7 @@ def flight_finder(parameters: dict, player=None, speak=None) -> str:
         if speak:
             speak("Analysing the results now, sir.")
 
-        flights = _parse_flights_with_gemini(raw_text, origin, destination, date)
+        flights = _parse_flights_with_ollama(raw_text, origin, destination, date)
         spoken  = _format_spoken(flights, origin, destination, date)
 
         if speak:

@@ -34,7 +34,6 @@ def _get_base_dir() -> Path:
 
 
 BASE_DIR        = _get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 
 HEADERS = {
     "User-Agent": (
@@ -153,27 +152,38 @@ def _get_transcript(video_id: str) -> str | None:
         return None
 
 
-def _summarize_with_gemini(transcript: str, video_url: str) -> str:
-    import google.generativeai as genai
+MODEL_TEXT = "kamekichi128/qwen3-4b-instruct-2507"
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=(
-            "You are JARVIS, an AI assistant. "
-            "Summarize YouTube video transcripts clearly and concisely. "
-            "Structure: 1-sentence overview, then 3-5 key points. "
-            "Be direct. Address the user as 'sir'. "
-            "Match the language of the transcript."
-        )
-    )
+def _summarize_with_ollama(transcript: str, video_url: str) -> str:
+    from agent.local_llm import ask_ollama
 
     max_chars = 80000
     truncated = transcript[:max_chars] + ("..." if len(transcript) > max_chars else "")
-    response  = model.generate_content(
-        f"Please summarize this YouTube video transcript:\n\n{truncated}"
-    )
-    return response.text.strip()
+
+    prompt = f"""
+Summarize this YouTube video transcript.
+
+Video URL:
+{video_url}
+
+Transcript:
+{truncated}
+
+Return:
+- 1 short overview sentence
+- 3 to 5 key points
+- Be concise
+- Address the user as sir
+"""
+
+    return ask_ollama(
+        prompt=prompt,
+        system=(
+            "You are JARVIS. Summarize YouTube video transcripts clearly, "
+            "concisely, and in the same language as the transcript."
+        ),
+        model=MODEL_TEXT
+    ).strip()
 
 
 def _save_summary(content: str, video_url: str) -> str:
@@ -318,7 +328,7 @@ def _handle_summarize(parameters: dict, player, speak) -> str:
         speak("Transcript retrieved. Generating summary now.")
 
     try:
-        summary = _summarize_with_gemini(transcript, url)
+        summary = _summarize_with_ollama(transcript, url)
     except Exception as e:
         return f"Summary generation failed, sir: {e}"
 

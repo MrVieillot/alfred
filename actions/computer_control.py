@@ -295,49 +295,7 @@ def _focus_window(title: str) -> str:
     return f"focus_window: unknown OS '{os_name}'"
 
 def _screen_find(description: str) -> tuple[int, int] | None:
-    api_key = _get_api_key()
-    if not api_key:
-        print("[ComputerControl] ⚠️ No API key for screen_find")
-        return None
-
-    try:
-        from google import genai
-        from google.genai import types as gtypes
-
-        _require_pyautogui()
-        w, h  = pyautogui.size()
-        img   = pyautogui.screenshot()
-        buf   = io.BytesIO()
-        img.save(buf, format="PNG")
-        image_bytes = buf.getvalue()
-
-        client = genai.Client(api_key=api_key)
-        prompt = (
-            f"This is a screenshot of a {w}×{h} pixel screen. "
-            f"Locate the UI element described as: '{description}'. "
-            f"Reply with ONLY the center coordinates as: x,y "
-            f"If the element is not visible, reply: NOT_FOUND"
-        )
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=[
-                gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                prompt,
-            ],
-        )
-
-        text = (response.text or "").strip()
-        if "NOT_FOUND" in text.upper():
-            return None
-
-        match = re.search(r"(\d+)\s*,\s*(\d+)", text)
-        if match:
-            return int(match.group(1)), int(match.group(2))
-
-    except Exception as e:
-        print(f"[ComputerControl] ⚠️ screen_find failed: {e}")
-
+    print("[ComputerControl] screen_find disabled in local mode.")
     return None
 
 def computer_control(

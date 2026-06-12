@@ -3,7 +3,7 @@ import os
 import sys
 import json
 import shutil
-import subprocess
+import subprocess 
 import tempfile
 import platform
 from pathlib import Path
@@ -23,10 +23,6 @@ def _get_base_dir() -> Path:
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
-def _get_api_key() -> str:
-    path = _get_base_dir() / "config" / "api_keys.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
     
 def _get_desktop() -> Path:
     if _OS == "Linux":
@@ -101,11 +97,10 @@ def _execute_generated_code(code: str, player=None) -> str:
         return f"Execution error: {e}"
 
 
-def _ask_gemini_for_desktop_action(task: str) -> str:
+MODEL_CODE = "qwen2.5-coder:7b"
 
-    import google.generativeai as genai
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel("gemini-2.5-flash")
+def _ask_local_for_desktop_action(task: str) -> str:
+    from agent.local_llm import ask_ollama
 
     desktop = str(_get_desktop())
 
@@ -122,35 +117,38 @@ Current OS: {_OS}
 Desktop path: {desktop}
 
 Generate safe Python code to accomplish the task below.
+
 Allowed modules ONLY:
-- pyautogui (mouse, keyboard — if needed)
-- pathlib.Path (file/folder inspection only, no deletion)
-- shutil.copy2, shutil.copytree, shutil.disk_usage (NO move, NO rmtree)
-- os_path (os.path equivalent, read-only)
+- pyautogui
+- pathlib.Path
+- shutil.copy2, shutil.copytree, shutil.disk_usage
+- os_path
 - time.sleep
 {os_specific}
 
 Hard rules:
-- NO file deletion (no unlink, no rmtree, no remove)
+- NO file deletion
 - NO subprocess calls
-- NO exec() or eval() inside the code
-- NO import statements (modules are pre-injected)
+- NO exec() or eval() inside the generated code
+- NO import statements
 - NO file write operations except explicitly requested
 - If task cannot be done safely with these tools, output exactly: UNSAFE
 
-Output ONLY the Python code. No explanation, no markdown, no backticks.
+Output ONLY Python code. No markdown. No explanation.
 
 Task: {task}"""
 
-    try:
-        response = model.generate_content(prompt)
-        code = response.text.strip()
-        if code.startswith("```"):
-            lines = code.split("\n")
-            code  = "\n".join(lines[1:-1]).strip()
-        return code
-    except Exception as e:
-        return f"ERROR: {e}"
+    code = ask_ollama(
+        prompt=prompt,
+        system="You write safe Python desktop automation code. Return only code.",
+        model=MODEL_CODE
+    ).strip()
+
+    if code.startswith("```"):
+        lines = code.split("\n")
+        code = "\n".join(lines[1:-1]).strip()
+
+    return code
 
 def set_wallpaper(image_path: str) -> str:
     path = Path(image_path).expanduser().resolve()
@@ -463,16 +461,16 @@ def desktop_control(
             if not actual_task:
                 return "Please describe what you want to do on the desktop."
 
-            print(f"[Desktop] Asking Gemini: {actual_task}")
+            print(f"[Desktop] Asking local model: {actual_task}")
             if player:
                 player.write_log("[Desktop] Generating action...")
 
-            code = _ask_gemini_for_desktop_action(actual_task)
+            code = _ask_local_for_desktop_action(actual_task)
             return _execute_generated_code(code, player=player)
 
         else:
             if action:
-                code = _ask_gemini_for_desktop_action(action)
+                code = _ask_local_for_desktop_action(action)
                 return _execute_generated_code(code, player=player)
             return "No action or task specified."
 

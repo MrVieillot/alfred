@@ -24,6 +24,17 @@ except ImportError:
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
 
+MODEL_TEXT = "kamekichi128/qwen3-4b-instruct-2507"
+
+def _ask_local(prompt: str, system: str = "", model: str = MODEL_TEXT) -> str:
+    from agent.local_llm import ask_ollama
+
+    return ask_ollama(
+        prompt=prompt,
+        system=system,
+        model=model
+    ).strip()
+
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -566,10 +577,6 @@ _DANGEROUS_ACTIONS = {"restart", "shutdown"}
 
 def _detect_action(description: str) -> dict:
 
-    import google.generativeai as genai
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel("gemini-2.5-flash-lite")
-
     available = ", ".join(sorted(ACTION_MAP.keys())) + \
                 ", volume_set, type_text, press_key, reload_n"
 
@@ -589,16 +596,31 @@ Rules:
 - For press_key: value is the key name (e.g. "f5", "tab", "enter").
 - For reload_n: value is an integer (number of times to reload).
 - If no clear match, pick the closest action.
-- Return ONLY the JSON, no explanation, no markdown."""
+- Return ONLY the JSON, no explanation, no markdown.
+"""
 
     try:
-        resp = model.generate_content(prompt)
-        text = re.sub(r"```(?:json)?", "", resp.text).strip().rstrip("`").strip()
+        from agent.local_llm import ask_ollama
+
+        text = ask_ollama(
+            prompt=prompt,
+            system=(
+                "You are a command intent classifier. "
+                "Return only valid JSON."
+            ),
+            model="kamekichi128/qwen3-4b-instruct-2507"
+        )
+
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
         return json.loads(text)
+
     except Exception as e:
         print(f"[Settings] Intent detection failed: {e}")
-        return {"action": description.lower().replace(" ", "_"), "value": None}
-
+        return {
+            "action": description.lower().replace(" ", "_"),
+            "value": None
+        }
+        
 def computer_settings(
     parameters: dict = None,
     response=None,
