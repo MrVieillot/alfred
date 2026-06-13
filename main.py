@@ -552,18 +552,43 @@ class JarvisLocal:
         def _tts():
             with self._speaking_lock:
                 try:
-                    import pyttsx3
+                    import requests
+                    import sounddevice as sd
+                    import soundfile as sf
 
-                    engine = pyttsx3.init()
-                    engine.say(text)
-                    engine.runAndWait()
-                    engine.stop()
+                    r = requests.post(
+                        "http://127.0.0.1:5005/tts",
+                        json={
+                            "text": text,
+                            "language": "French",
+                            "speaker": "aiden",
+                            "instruct": "Speak in a calm, confident assistant voice."
+                        },
+                        timeout=600
+                    )
 
-                except RuntimeError as e:
-                    print(f"[TTS] Runtime error: {e}")
+                    r.raise_for_status()
+                    data = r.json()
+
+                    wav_path = data.get("path")
+                    if not wav_path:
+                        raise RuntimeError("Qwen3-TTS did not return a wav path.")
+
+                    audio, sr = sf.read(wav_path, dtype="float32")
+                    sd.play(audio, sr)
+                    sd.wait()
 
                 except Exception as e:
-                    print(f"[TTS] Error: {e}")
+                    print(f"[QwenTTS] Failed, fallback pyttsx3: {e}")
+
+                    try:
+                        import pyttsx3
+                        engine = pyttsx3.init()
+                        engine.say(text)
+                        engine.runAndWait()
+                        engine.stop()
+                    except Exception as e2:
+                        print(f"[TTS] Fallback failed: {e2}")
 
         threading.Thread(target=_tts, daemon=True).start()
 
