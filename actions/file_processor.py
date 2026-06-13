@@ -67,6 +67,60 @@ def _detect_type(path: Path) -> str:
     if ext in ("pptx", "ppt"): return "pptx"
     return "unknown"
 
+def _ask_vision_file(path: Path, instruction: str) -> str:
+    import base64
+    import requests
+
+    image_b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
+
+    payload = {
+        "model": "minicpm-v4.5:8b",
+        "messages": [
+            {
+                "role": "user",
+                "content": instruction,
+                "images": [image_b64]
+            }
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 250
+        }
+    }
+
+    r = requests.post(
+        "http://localhost:11434/api/chat",
+        json=payload,
+        timeout=180
+    )
+
+    r.raise_for_status()
+
+    data = r.json()
+    print("[Vision raw response]", data)
+
+    text = data.get("message", {}).get("content", "").strip()
+
+    lines = text.splitlines()
+    clean = []
+    seen_counts = {}
+
+    for line in lines:
+        key = line.strip().lower()
+        if not key:
+            continue
+
+        seen_counts[key] = seen_counts.get(key, 0) + 1
+        if seen_counts[key] <= 2:
+            clean.append(line.strip())
+
+    text = "\n".join(clean).strip()
+
+    if len(text) > 800:
+        text = text[:800] + "..."
+
+    return text
 
 def _file_size_str(path: Path) -> str:
     size = path.stat().st_size
@@ -89,10 +143,21 @@ def _process_image(path: Path, action: str, params: dict, speak=None) -> str:
     action = action or "describe"
 
     if action in ("describe", "ocr", "analyze", "read", "extract_text"):
-        return (
-            "Local image analysis is not available yet. "
-            "We need to connect a local vision model such as llava, minicpm-v, or qwen-vl."
-        )
+        prompt = params.get("instruction") or {
+            "describe": "Describe this image clearly and concisely.",
+            "ocr": "Extract all visible text from this image. Return only the text.",
+            "analyze": (
+                "Analyze this screenshot in 3 short sentences maximum. "
+                "Describe the main visible window, important UI elements, "
+                "and any useful context. "
+                "Do NOT list repeated folder names. "
+                "Do NOT transcribe every visible word."
+            ),
+            "read": "Read all visible text in this image.",
+            "extract_text": "Extract all visible text from this image.",
+        }.get(action, "Analyze this image clearly.")
+
+        return _ask_vision_file(path, prompt)
 
     if action == "resize":
         width  = int(params.get("width",  0))

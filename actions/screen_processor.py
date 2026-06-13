@@ -36,7 +36,6 @@ except ImportError:
 import requests
 
 VISION_MODEL = "minicpm-v4.5:8b"
-OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -46,41 +45,49 @@ def _base_dir() -> Path:
 
 _BASE        = _base_dir()
 
+OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 
 def _ask_vision(image_bytes: bytes, user_text: str) -> str:
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     prompt = f"""
-You are JARVIS vision.
-Analyze the provided screenshot.
+    You are JARVIS Vision.
 
-Rules:
-- Be concise.
-- If asked for coordinates, return ONLY x,y.
-- If asked to read text, return only the visible text.
-- If something is not visible, return NOT_FOUND.
+    Describe the screen naturally.
 
-User request:
-{user_text}
-"""
+    If a movie, TV show, YouTube video, Netflix page or media player is visible,
+    identify it and summarize it in one sentence.
+
+    Do not output raw OCR unless explicitly requested.
+
+    User request:
+    {user_text}
+    """
 
     r = requests.post(
-        OLLAMA_GENERATE_URL,
+        OLLAMA_CHAT_URL,
         json={
             "model": VISION_MODEL,
-            "prompt": prompt,
-            "images": [image_b64],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_b64]
+                }
+            ],
             "stream": False,
             "options": {
                 "temperature": 0.1,
-                "num_predict": 600
+                "num_predict": 250
             }
         },
         timeout=180
     )
 
     r.raise_for_status()
-    return r.json().get("response", "").strip()
+    data = r.json()
+
+    return data.get("message", {}).get("content", "").strip()
 
 
 def _load_config() -> dict:
@@ -261,8 +268,7 @@ def screen_process(
     angle = params.get("angle", "screen").lower().strip()
 
     if not user_text:
-        print("[Vision] No question provided")
-        return False
+        return ""
 
     try:
         if angle == "camera":

@@ -483,6 +483,7 @@ class JarvisLocal:
         self._loop = None
         self._is_speaking = False
         self._speaking_lock = threading.Lock()
+        self._command_lock = threading.Lock()
 
     def _build_system_prompt(self) -> str:
         from datetime import datetime
@@ -532,26 +533,39 @@ class JarvisLocal:
         return {"type": "answer", "content": text}
 
     def _on_text_command(self, text: str):
+        def _run():
+            with self._command_lock:
+                self._handle_command_sync(text)
+
         threading.Thread(
-            target=self._handle_command_sync,
-            args=(text,),
+            target=_run,
             daemon=True
         ).start()
 
     def speak(self, text: str):
+        text = str(text).strip()
+        if not text:
+            return
+
         self.ui.write_log(f"Jarvis: {text}")
 
-        try:
-            import pyttsx3
+        def _tts():
+            with self._speaking_lock:
+                try:
+                    import pyttsx3
 
-            def _tts():
-                engine = pyttsx3.init()
-                engine.say(text)
-                engine.runAndWait()
+                    engine = pyttsx3.init()
+                    engine.say(text)
+                    engine.runAndWait()
+                    engine.stop()
 
-            threading.Thread(target=_tts, daemon=True).start()
-        except Exception:
-            pass
+                except RuntimeError as e:
+                    print(f"[TTS] Runtime error: {e}")
+
+                except Exception as e:
+                    print(f"[TTS] Error: {e}")
+
+        threading.Thread(target=_tts, daemon=True).start()
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
@@ -566,6 +580,9 @@ class JarvisLocal:
         if not text:
             return
 
+        if text.startswith("[FILE_UPLOADED]"):
+            return
+
         lowered = text.lower()
 
         # 1) Recherche web directe
@@ -577,7 +594,8 @@ class JarvisLocal:
                     query = text[len(prefix):].strip()
                     break
 
-            self.ui.write_log(f"You: {text}")
+            
+            #self.ui.write_log(f"You: {text}")
             self.ui.set_state("THINKING")
 
             result = self._execute_tool_sync(
@@ -588,7 +606,7 @@ class JarvisLocal:
                 }
             )
 
-            self.ui.write_log(result)
+            
 
             spoken_summary = ask_ollama(
                 prompt=f"""
@@ -638,7 +656,7 @@ class JarvisLocal:
             else:
                 action = "optimize"
 
-            self.ui.write_log(f"You: {text}")
+            #self.ui.write_log(f"You: {text}")
             self.ui.set_state("THINKING")
 
             result = self._execute_tool_sync(
@@ -650,7 +668,7 @@ class JarvisLocal:
                 }
             )
 
-            self.ui.write_log(result)
+            
 
             if action == "optimize":
                 self.speak("I optimized the Python file, sir.")
@@ -685,7 +703,7 @@ class JarvisLocal:
         )
 
         if lowered.startswith(create_keywords) and any(k in lowered for k in dev_keywords):
-            self.ui.write_log(f"You: {text}")
+            #self.ui.write_log(f"You: {text}")
             self.ui.set_state("THINKING")
 
             result = self._execute_tool_sync(
@@ -697,7 +715,7 @@ class JarvisLocal:
                 }
             )
 
-            self.ui.write_log(result)
+            
             self.speak("I created the project, sir.")
 
             if not self.ui.muted:
@@ -718,7 +736,7 @@ class JarvisLocal:
         )
 
         if lowered.startswith(code_prefixes):
-            self.ui.write_log(f"You: {text}")
+            #self.ui.write_log(f"You: {text}")
             self.ui.set_state("THINKING")
 
             result = self._execute_tool_sync(
@@ -731,7 +749,7 @@ class JarvisLocal:
                 }
             )
 
-            self.ui.write_log(result)
+            
             self.speak("I created the Python file on your desktop, sir.")
 
             if not self.ui.muted:
@@ -762,32 +780,108 @@ class JarvisLocal:
                     }
                 )
 
-                self.ui.write_log(result)
+                
                 self.speak("I created the file on your desktop, sir.")
                 return
 
-        if lowered.startswith(("summarize ", "analyse ", "analyze ", "explain file ")):
-            from pathlib import Path
+        uploaded_file_phrases = (
+            "uploaded file",
+            "uploaded screenshot",
+            "uploaded image",
+            "file i uploaded",
+            "screenshot i uploaded",
+            "image i uploaded",
+            "screenshot uploaded",
+            "image uploaded",
+            "the screenshot",
+            "th screenshot",
+            "the image",
+            "this file",
+            "this screenshot",
+            "this image",
+            "what is on the screenshot",
+            "what is on th screenshot",
+            "what's on the screenshot",
+            "describe the screenshot",
+            "describe screenshot",
+            "analyze the screenshot",
+            "analyse the screenshot",
+        )
 
-            words = text.split()
-            filename = words[-1].strip('"')
-
-            desktop_path = Path.home() / "Desktop" / filename
-            local_path = Path(filename)
-
-            if desktop_path.exists():
-                file_path = str(desktop_path)
-            elif local_path.exists():
-                file_path = str(local_path.resolve())
-            elif getattr(self.ui, "current_file", None):
-                file_path = self.ui.current_file
-            else:
-                self.speak(f"I cannot find the file {filename}, sir.")
+        if any(p in lowered for p in uploaded_file_phrases):
+            if not getattr(self.ui, "current_file", None):
+                self.speak("No uploaded file is currently available, sir.")
                 return
 
+            self.ui.set_state("THINKING")
+
+            action = "analyze"
+            if "summarize" in lowered or "summerize" in lowered or "summary" in lowered:
+                action = "summarize"
+            if "ocr" in lowered or "read text" in lowered or "extract text" in lowered:
+                action = "ocr"
+
+            result = self._execute_tool_sync(
+                "file_processor",
+                {
+                    "file_path": self.ui.current_file,
+                    "action": action
+                }
+            )
+
+            if result:
+                self.speak(str(result)[:600])
+            else:
+                self.speak("I could not analyze the uploaded file, sir.")
+
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+
+            return
+
+        # Analyse / résumé de fichier explicite
+        if lowered.startswith(("summarize ", "summerize ", "analyse ", "analyze ", "explain file ")):
+            from pathlib import Path
+
+            # Si l'utilisateur parle explicitement du fichier uploadé
+            if any(p in lowered for p in uploaded_file_phrases):
+                if getattr(self.ui, "current_file", None):
+                    file_path = self.ui.current_file
+                else:
+                    self.speak("No uploaded file is currently available, sir.")
+                    return
+            else:
+                words = text.split()
+                filename = words[-1].strip('"')
+
+                # Évite de chercher un faux fichier nommé "file", "image", etc.
+                if filename.lower() in ("file", "image", "screenshot", "uploaded", "it", "this"):
+                    if getattr(self.ui, "current_file", None):
+                        file_path = self.ui.current_file
+                    else:
+                        self.speak("No uploaded file is currently available, sir.")
+                        return
+                else:
+                    desktop_path = Path.home() / "Desktop" / filename
+                    local_path = Path(filename)
+
+                    if desktop_path.exists():
+                        file_path = str(desktop_path)
+                    elif local_path.exists():
+                        file_path = str(local_path.resolve())
+                    elif getattr(self.ui, "current_file", None):
+                        file_path = self.ui.current_file
+                    else:
+                        self.speak(f"I cannot find the file {filename}, sir.")
+                        return
+
             action = "summarize"
+
             if lowered.startswith(("analyse ", "analyze ")):
                 action = "analyze"
+
+            if "ocr" in lowered or "read text" in lowered or "extract text" in lowered:
+                action = "ocr"
 
             result = self._execute_tool_sync(
                 "file_processor",
@@ -797,16 +891,61 @@ class JarvisLocal:
                 }
             )
 
-            self.ui.write_log(result)
-            self.speak(result[:600])
+            if result:
+                
+                self.speak(str(result)[:600])
+            else:
+                self.speak("I could not analyze the file, sir.")
 
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
 
-            return    
+            return   
+
+        vision_phrases = (
+            "what do you see on my screen",
+            "what is on my screen",
+            "what's on my screen",
+            "what is on the screen",
+            "what's on the screen",
+            "what is on screen",
+            "what's on screen",
+            "what do you see on the screen",
+            "what window do you see",
+            "what window are open",
+            "analyze my screen",
+            "analyse my screen",
+            "read my screen",
+            "look at my screen",
+            "describe my screen",
+            "describe the screen",
+        )
+
+        if any(p in lowered for p in vision_phrases):
+            #self.ui.write_log(f"You: {text}")
+            self.ui.set_state("THINKING")
+
+            result = self._execute_tool_sync(
+                "screen_process",
+                {
+                    "angle": "screen",
+                    "text": text
+                }
+            )
+
+            if result:
+                
+                self.speak(str(result)[:600])
+            else:
+                self.speak("I could not analyze the screen, sir.")
+
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+
+            return
 
         # 5) Fallback : modèle principal + JSON tools
-        self.ui.write_log(f"You: {text}")
+        #self.ui.write_log(f"You: {text}")
         self.ui.set_state("THINKING")
 
         try:
@@ -941,17 +1080,12 @@ class JarvisLocal:
                 return youtube_video(parameters=args, response=None, player=self.ui) or "Done."
 
             elif name == "screen_process":
-                threading.Thread(
-                    target=screen_process,
-                    kwargs={
-                        "parameters": args,
-                        "response": None,
-                        "player": self.ui,
-                        "session_memory": None
-                    },
-                    daemon=True
-                ).start()
-                return "Vision module activated."
+                return screen_process(
+                    parameters=args,
+                    response=None,
+                    player=None,
+                    session_memory=None
+                )
 
             elif name == "computer_settings":
                 return computer_settings(parameters=args, response=None, player=self.ui) or "Done."
@@ -989,7 +1123,12 @@ class JarvisLocal:
             elif name == "file_processor":
                 if not args.get("file_path") and self.ui.current_file:
                     args["file_path"] = self.ui.current_file
-                return file_processor(parameters=args, player=self.ui, speak=self.speak) or "Done."
+
+                return file_processor(
+                    parameters=args,
+                    player=None,
+                    speak=None
+                ) or ""
 
             elif name == "computer_control":
                 return computer_control(parameters=args, player=self.ui) or "Done."
