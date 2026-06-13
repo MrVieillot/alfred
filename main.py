@@ -484,6 +484,13 @@ class JarvisLocal:
         self._is_speaking = False
         self._speaking_lock = threading.Lock()
         self._command_lock = threading.Lock()
+        self.session_memory = {
+            "last_user_message": "",
+            "last_response": "",
+            "last_tool": "",
+            "last_tool_result": "",
+            "last_saved_text": "",
+        }
 
     def _build_system_prompt(self) -> str:
         from datetime import datetime
@@ -549,6 +556,9 @@ class JarvisLocal:
 
         self.ui.write_log(f"Jarvis: {text}")
 
+        self.session_memory["last_response"] = text
+        self.session_memory["last_saved_text"] = text
+
         def _tts():
             with self._speaking_lock:
                 try:
@@ -609,6 +619,143 @@ class JarvisLocal:
             return
 
         lowered = text.lower()
+        self.session_memory["last_user_message"] = text
+
+        # Mémoire de session : utiliser la dernière réponse de Jarvis
+        # Exemples:
+        # - "summarize it in notepad"
+        # - "save this to a file"
+        # - "write that in notepad"
+        # - "explain your previous answer more simply"
+        memory_reference_patterns = (
+            r"\bit\b",
+            r"\bthis\b",
+            r"\bthat\b",
+            r"\bça\b",
+            r"\bca\b",
+            r"\bceci\b",
+            r"\bcela\b",
+            r"what you said",
+            r"your answer",
+            r"the answer",
+            r"previous answer",
+            r"last answer",
+            r"last response",
+            r"previous response",
+        )
+
+        wants_previous_context = any(
+            pattern in lowered
+            for pattern in (
+                " it", " this", " that", " ça", " ca", " ceci", " cela",
+                "what you said", "your answer", "the answer",
+                "previous answer", "last answer", "last response",
+                "summarize it", "summerize it", "summarize this", "summerize this",
+                "write it", "save it", "put it", "in notepad"
+            )
+        )
+
+        if wants_previous_context:
+            previous_text = self.session_memory.get("last_saved_text", "").strip()
+            if not previous_text:
+                previous_text = self.session_memory.get("last_response", "").strip()
+
+            if not previous_text:
+                self.speak("I do not have previous content to reuse, sir.")
+                return
+
+            self.ui.set_state("THINKING")
+
+            wants_summary = (
+                "summarize" in lowered
+                or "summerize" in lowered
+                or "summary" in lowered
+                or "résume" in lowered
+                or "resume" in lowered
+            )
+
+            wants_save = (
+                "notepad" in lowered
+                or "file" in lowered
+                or "txt" in lowered
+                or "save" in lowered
+                or "write" in lowered
+                or "written" in lowered
+                or "put" in lowered
+            )
+
+            wants_explain = (
+                "explain" in lowered
+                or "re explain" in lowered
+                or "re-explain" in lowered
+                or "simpler" in lowered
+                or "more simply" in lowered
+                or "simple terms" in lowered
+            )
+
+            if wants_summary:
+                summary = ask_ollama(
+                    prompt=f"Summarize this text in 2-3 short sentences:\n\n{previous_text}",
+                    system="You are JARVIS. Be concise and clear.",
+                    model="kamekichi128/qwen3-4b-instruct-2507"
+                ).strip()
+
+                self.session_memory["last_saved_text"] = summary
+                self.session_memory["last_response"] = summary
+
+                if wants_save:
+                    self._execute_tool_sync(
+                        "file_controller",
+                        {
+                            "action": "create_file",
+                            "path": "desktop",
+                            "name": "jarvis_summary.txt",
+                            "content": summary
+                        }
+                    )
+                    self.speak("I summarized the previous answer and saved it to a text file on your desktop, sir.")
+                else:
+                    self.speak(summary)
+
+                if not self.ui.muted:
+                    self.ui.set_state("LISTENING")
+
+                return
+
+            if wants_explain:
+                explanation = ask_ollama(
+                    prompt=f"Explain this more simply:\n\n{previous_text}",
+                    system="You are JARVIS. Explain clearly and simply.",
+                    model="kamekichi128/qwen3-4b-instruct-2507"
+                ).strip()
+
+                self.session_memory["last_saved_text"] = explanation
+                self.session_memory["last_response"] = explanation
+                self.speak(explanation)
+
+                if not self.ui.muted:
+                    self.ui.set_state("LISTENING")
+
+                return
+
+            if wants_save:
+                self._execute_tool_sync(
+                    "file_controller",
+                    {
+                        "action": "create_file",
+                        "path": "desktop",
+                        "name": "jarvis_note.txt",
+                        "content": previous_text
+                    }
+                )
+
+                self.speak("I saved the previous answer to a text file on your desktop, sir.")
+
+                if not self.ui.muted:
+                    self.ui.set_state("LISTENING")
+
+                return
+
 
         # 1) Recherche web directe
         if lowered.startswith(("search ", "search the web for ", "look up ", "google ")):
@@ -968,7 +1115,7 @@ class JarvisLocal:
                 self.ui.set_state("LISTENING")
 
             return
-
+        
         # 5) Fallback : modèle principal + JSON tools
         #self.ui.write_log(f"You: {text}")
         self.ui.set_state("THINKING")
